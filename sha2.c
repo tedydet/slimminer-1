@@ -11,6 +11,9 @@
 #include "cpuminer-config.h"
 #include "miner.h"
 
+#undef HAVE_SHA256_4WAY
+/* Force scalar SHA256 implementation on arm64 (no 4-way asm available) */
+
 #include <string.h>
 #include <inttypes.h>
 

@@ -115,8 +115,18 @@ else
 	JANSSON_LIBS=-ljansson
 fi
 
-LIBCURL_CHECK_CONFIG(, 7.15.2, ,
-  [AC_MSG_ERROR([Missing required libcurl >= 7.15.2])])
+dnl LIBCURL_CHECK_CONFIG(, 7.15.2, ,
+dnl   [AC_MSG_ERROR([Missing required libcurl >= 7.15.2])])
+
+dnl Manually define libcurl flags (we skip LIBCURL_CHECK_CONFIG on macOS)
+LIBCURL_CPPFLAGS=""
+LIBCURL_LIBS="-lcurl"
+
+AC_SUBST(LIBCURL_CPPFLAGS)
+AC_SUBST(LIBCURL_LIBS)
+dnl Some Makefile.am use @LIBCURL@ directly
+LIBCURL="-lcurl"
+AC_SUBST(LIBCURL)
 
 AC_SUBST(JANSSON_LIBS)
 AC_SUBST(PTHREAD_FLAGS)

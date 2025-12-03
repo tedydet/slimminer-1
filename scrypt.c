@@ -30,6 +30,10 @@
 #include "cpuminer-config.h"
 #include "miner.h"
 
+#undef HAVE_SHA256_4WAY
+/* Disable 4-way SHA256 path on arm64, use scalar scrypt/SHA256 only */
+
+
 #include <stdlib.h>
 #include <string.h>
 #include <inttypes.h>

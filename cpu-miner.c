@@ -841,56 +841,75 @@ static void *miner_thread(void *userdata)
 
     /* record scanhash elapsed time */
     gettimeofday(&tv_end, NULL);
+    /* Compute elapsed time as tv_end - tv_start (original semantics). */
     timeval_subtract(&diff, &tv_end, &tv_start);
 
-	double time_elapsed = (diff.tv_sec + 1e-6 * diff.tv_usec);
+    double time_elapsed = (diff.tv_sec + 1e-6 * diff.tv_usec);
 
-	if(time_elapsed > 2 && thr_id == opt_n_threads - 1) 
-	{
+    /* Only update hashrate periodically and from the last thread to avoid
+     * excessive log spam and jitter. Use a longer window (>= 10 s) for a
+     * more stable hashrate estimate. */
+    if (time_elapsed >= 10.0 && thr_id == opt_n_threads - 1) {
+      double total_hashrate;
+      unsigned long total_hashes = 0;
+
+      /* Reset the time window for the next measurement */
       gettimeofday(&tv_start, NULL);
 
-	  double hashrate = 0.;
-	  double total_hashrate;
-	  double time_elapsed = (diff.tv_sec + 1e-6 * diff.tv_usec);
-	  unsigned long total_hashes = 0;
-	
+      pthread_mutex_lock(&stats_lock);
+      for (i = 0; i < opt_n_threads; i++) {
+        unsigned long thread_done    = thr_hashes_done[i];
+        unsigned long thread_skipped = thr_hashes_skipped[i];
+        unsigned long thread_total   = thread_done + thread_skipped;
 
-	  pthread_mutex_lock(&stats_lock);
-	  for (i = 0; i < opt_n_threads; i++)
-	  {
- 		total_hashes += thr_hashes_done[i];
-		thr_hashrates[i] = thr_hashes_done[i] / time_elapsed;		
+        /* For reporting, we follow the original miner semantics and only
+         * use fully processed hashes (thread_done). This keeps the
+         * reported khash/s comparable to older builds (e.g. your 5600G
+         * numbers) and avoids inflating the hashrate with skipped nonces. */
+        double display_rate = (time_elapsed > 0.0)
+                              ? (double)thread_done / time_elapsed
+                              : 0.0;
 
-		if(!opt_quiet) 
-		{
-		  sprintf(s, thr_hashrates[i] >= 1e6 ? "%.0f" : "%.2f", 1e-3 * thr_hashrates[i]);
-		  applog(LOG_INFO, "thread %d: %lu hashes, %s khash/s", i, thr_hashes_done[i], s);
-		}
+        total_hashes += thread_done;
 
-		hashrate += thr_hashrates[i];
-	  }
-	  pthread_mutex_unlock(&stats_lock);
+        if (!opt_quiet) {
+          sprintf(s, display_rate >= 1e6 ? "%.0f" : "%.2f",
+                  1e-3 * display_rate);
+          applog(LOG_INFO,
+                 "thread %d: %lu hashes, %s khash/s (skipped: %lu)",
+                 i, thread_done, s, thread_skipped);
+        }
 
-	  total_hashrate = total_hashes / time_elapsed;
+        /* For internal scheduling (max_nonce adjustment), keep using
+         * done + skipped to approximate how much nonce space each
+         * thread has actually scanned. */
+        thr_hashrates[i] = (time_elapsed > 0.0)
+                           ? (double)thread_total / time_elapsed
+                           : 0.0;
+      }
 
-	  if(opt_hashrate || !opt_quiet)
-	  {
-	  	sprintf(s, total_hashrate >= 1e6 ? "%.0f" : "%.2f", 1e-3 * total_hashrate);
-	  	applog(LOG_INFO, "Accepted: %lu/%lu, Total Hashrate: %s khash/s ",accepted_count,accepted_count + rejected_count, s);
-	  }
+      /* Total hashrate is also based only on completed hashes to stay
+       * comparable with the original miner output. */
+      total_hashrate = (time_elapsed > 0.0)
+                       ? (double)total_hashes / time_elapsed
+                       : 0.0;
 
-	  // recalculate hashrates including skipped hashes so that threads receive work 
-	  // according to how many nonce values they pass over rather than just how many they fully hash
-	  for (i = 0; i < opt_n_threads; i++)
-	  {
- 		total_hashes += thr_hashes_done[i] + thr_hashes_skipped[i];
-		thr_hashrates[i] = (thr_hashes_done[i] + thr_hashes_skipped[i]) / time_elapsed;		
+      if (opt_hashrate || !opt_quiet) {
+        sprintf(s, total_hashrate >= 1e6 ? "%.0f" : "%.2f",
+                1e-3 * total_hashrate);
+        applog(LOG_INFO,
+               "Accepted: %lu/%lu, Total Hashrate (10s avg): %s khash/s ",
+               accepted_count, accepted_count + rejected_count, s);
+      }
 
-		thr_hashes_done[i] = 0;
-		thr_hashes_skipped[i] = 0;
-	  }
-
-	}
+      /* After reporting, reset the per-thread counters so the next
+       * interval starts fresh. */
+      for (i = 0; i < opt_n_threads; i++) {
+        thr_hashes_done[i] = 0;
+        thr_hashes_skipped[i] = 0;
+      }
+      pthread_mutex_unlock(&stats_lock);
+    }
 
     /* if nonce found, submit work */
     if(rc && !opt_benchmark && !submit_work(mythr, &work))

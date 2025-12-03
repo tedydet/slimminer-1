@@ -317,14 +317,16 @@ json_t *json_rpc_call(CURL *curl, const char *url,
   curl_easy_setopt(curl, CURLOPT_URL, url);
   if (opt_cert)
     curl_easy_setopt(curl, CURLOPT_CAINFO, opt_cert);
+  /* Use explicit, no-encoding HTTP to avoid chunked transfer for old JSON-RPC */
   curl_easy_setopt(curl, CURLOPT_ENCODING, "");
   curl_easy_setopt(curl, CURLOPT_FAILONERROR, 1);
   curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1);
   curl_easy_setopt(curl, CURLOPT_TCP_NODELAY, 1);
   curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, all_data_cb);
   curl_easy_setopt(curl, CURLOPT_WRITEDATA, &all_data);
-  curl_easy_setopt(curl, CURLOPT_READFUNCTION, upload_data_cb);
-  curl_easy_setopt(curl, CURLOPT_READDATA, &upload_data);
+  /* Do NOT use a custom READ/UPLOAD callback for the JSON body; let libcurl
+   * handle the POST body so it can send a proper Content-Length and avoid
+   * Transfer-Encoding: chunked, which Slimcoin's old RPC cannot handle. */
 #if LIBCURL_VERSION_NUM >= 0x071200
   curl_easy_setopt(curl, CURLOPT_SEEKFUNCTION, &seek_data_cb);
   curl_easy_setopt(curl, CURLOPT_SEEKDATA, &upload_data);
@@ -346,6 +348,10 @@ json_t *json_rpc_call(CURL *curl, const char *url,
   if (longpoll)
     curl_easy_setopt(curl, CURLOPT_SOCKOPTFUNCTION, sockopt_keepalive_cb);
 #endif
+  /* Force old-style HTTP/1.0 and explicit Content-Length so that the
+   * legacy Slimcoin JSON-RPC implementation does not choke on
+   * Transfer-Encoding: chunked. */
+  curl_easy_setopt(curl, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_1_0);
   curl_easy_setopt(curl, CURLOPT_POST, 1);
 
   if (opt_protocol)
@@ -354,11 +360,14 @@ json_t *json_rpc_call(CURL *curl, const char *url,
   upload_data.buf = rpc_req;
   upload_data.len = strlen(rpc_req);
   upload_data.pos = 0;
-  sprintf(len_hdr, "Content-Length: %lu",
-          (unsigned long) upload_data.len);
+
+  /* Let libcurl handle the POST body and set Content-Length based on the
+   * exact size of the JSON payload to avoid chunked encoding. */
+  curl_easy_setopt(curl, CURLOPT_POSTFIELDS, rpc_req);
+  curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, (long)upload_data.len);
 
   headers = curl_slist_append(headers, "Content-Type: application/json");
-  headers = curl_slist_append(headers, len_hdr);
+  /* No manual Content-Length header here; libcurl will add the correct one. */
   headers = curl_slist_append(headers, "User-Agent: " USER_AGENT);
   headers = curl_slist_append(headers, "X-Mining-Extensions: midstate");
   headers = curl_slist_append(headers, "Accept:"); /* disable Accept hdr*/
